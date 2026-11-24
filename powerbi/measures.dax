@@ -1,0 +1,431 @@
+/*
+Power BI DAX Measures for Credit Risk Dashboard
+================================================
+Copy these measures into your Power BI model.
+Assumes the following tables are loaded:
+- ScoredApplicants (from scored_applicants.csv)
+- FeatureImportance (from feature_importance.csv)
+- RiskBands (from risk_bands.csv)
+- ModelPerformance (from model_performance.csv)
+*/
+
+/* ============================================================
+   BASE MEASURES
+   ============================================================ */
+
+Total Applicants =
+COUNTROWS(ScoredApplicants)
+
+Default Rate =
+DIVIDE(
+    CALCULATE(COUNTROWS(ScoredApplicants), ScoredApplicants[actual_default] = 1),
+    [Total Applicants],
+    0
+)
+
+Average Default Probability =
+AVERAGE(ScoredApplicants[default_probability])
+
+Average Risk Score =
+AVERAGE(ScoredApplicants[risk_score])
+
+/* ============================================================
+   DECISION COUNTS
+   ============================================================ */
+
+Approved Count =
+CALCULATE([Total Applicants], ScoredApplicants[decision] = "Approve")
+
+Review Count =
+CALCULATE([Total Applicants], ScoredApplicants[decision] = "Review")
+
+Declined Count =
+CALCULATE([Total Applicants], ScoredApplicants[decision] = "Decline")
+
+Approved Rate =
+DIVIDE([Approved Count], [Total Applicants], 0)
+
+Review Rate =
+DIVIDE([Review Count], [Total Applicants], 0)
+
+Declined Rate =
+DIVIDE([Declined Count], [Total Applicants], 0)
+
+/* ============================================================
+   RISK BAND DISTRIBUTION
+   ============================================================ */
+
+Very Low Risk Count =
+CALCULATE([Total Applicants], ScoredApplicants[risk_band] = "Very Low")
+
+Low Risk Count =
+CALCULATE([Total Applicants], ScoredApplicants[risk_band] = "Low")
+
+Medium Risk Count =
+CALCULATE([Total Applicants], ScoredApplicants[risk_band] = "Medium")
+
+High Risk Count =
+CALCULATE([Total Applicants], ScoredApplicants[risk_band] = "High")
+
+Very High Risk Count =
+CALCULATE([Total Applicants], ScoredApplicants[risk_band] = "Very High")
+
+/* Risk Band Percentages */
+Very Low Risk % = DIVIDE([Very Low Risk Count], [Total Applicants], 0)
+Low Risk % = DIVIDE([Low Risk Count], [Total Applicants], 0)
+Medium Risk % = DIVIDE([Medium Risk Count], [Total Applicants], 0)
+High Risk % = DIVIDE([High Risk Count], [Total Applicants], 0)
+Very High Risk % = DIVIDE([Very High Risk Count], [Total Applicants], 0)
+
+/* ============================================================
+   MODEL PERFORMANCE METRICS
+   ============================================================ */
+
+Model ROC-AUC =
+CALCULATE(
+    MAX(ModelPerformance[value]),
+    ModelPerformance[metric] = "roc_auc"
+)
+
+Model Precision =
+CALCULATE(
+    MAX(ModelPerformance[value]),
+    ModelPerformance[metric] = "precision"
+)
+
+Model Recall =
+CALCULATE(
+    MAX(ModelPerformance[value]),
+    ModelPerformance[metric] = "recall"
+)
+
+Model F1 =
+CALCULATE(
+    MAX(ModelPerformance[value]),
+    ModelPerformance[metric] = "f1"
+)
+
+Model Accuracy =
+CALCULATE(
+    MAX(ModelPerformance[value]),
+    ModelPerformance[metric] = "accuracy"
+)
+
+/* ============================================================
+   CONFUSION MATRIX METRICS (at selected threshold)
+   ============================================================ */
+
+True Positives =
+CALCULATE(
+    COUNTROWS(ScoredApplicants),
+    ScoredApplicants[actual_default] = 1,
+    ScoredApplicants[decision] = "Decline"
+)
+
+False Positives =
+CALCULATE(
+    COUNTROWS(ScoredApplicants),
+    ScoredApplicants[actual_default] = 0,
+    ScoredApplicants[decision] = "Decline"
+)
+
+True Negatives =
+CALCULATE(
+    COUNTROWS(ScoredApplicants),
+    ScoredApplicants[actual_default] = 0,
+    ScoredApplicants[decision] <> "Decline"
+)
+
+False Negatives =
+CALCULATE(
+    COUNTROWS(ScoredApplicants),
+    ScoredApplicants[actual_default] = 1,
+    ScoredApplicants[decision] <> "Decline"
+)
+
+/* Derived Metrics */
+Precision at Threshold =
+DIVIDE([True Positives], [True Positives] + [False Positives], 0)
+
+Recall at Threshold =
+DIVIDE([True Positives], [True Positives] + [False Negatives], 0)
+
+Specificity at Threshold =
+DIVIDE([True Negatives], [True Negatives] + [False Positives], 0)
+
+F1 at Threshold =
+DIVIDE(
+    2 * [Precision at Threshold] * [Recall at Threshold],
+    [Precision at Threshold] + [Recall at Threshold],
+    0
+)
+
+/* ============================================================
+   PORTFOLIO RISK METRICS
+   ============================================================ */
+
+Expected Loss =
+SUMX(
+    ScoredApplicants,
+    ScoredApplicants[default_probability] * ScoredApplicants[loan_amount] * 0.5  /* Assuming 50% LGD */
+)
+
+Portfolio Value =
+SUM(ScoredApplicants[loan_amount])
+
+Expected Loss Rate =
+DIVIDE([Expected Loss], [Portfolio Value], 0)
+
+High Risk Exposure =
+CALCULATE(
+    SUM(ScoredApplicants[loan_amount]),
+    ScoredApplicants[risk_band] IN {"High", "Very High"}
+)
+
+High Risk Exposure % =
+DIVIDE([High Risk Exposure], [Portfolio Value], 0)
+
+/* ============================================================
+   SEGMENTATION MEASURES
+   ============================================================ */
+
+Default Rate by Purpose =
+CALCULATE(
+    [Default Rate],
+    ALLEXCEPT(ScoredApplicants, ScoredApplicants[loan_purpose])
+)
+
+Default Rate by Employment =
+CALCULATE(
+    [Default Rate],
+    ALLEXCEPT(ScoredApplicants, ScoredApplicants[employment_type])
+)
+
+Default Rate by Credit Score Band =
+VAR ScoreBand =
+    SWITCH(
+        TRUE(),
+        ScoredApplicants[credit_score] >= 750, "Excellent (750+)",
+        ScoredApplicants[credit_score] >= 700, "Good (700-749)",
+        ScoredApplicants[credit_score] >= 650, "Fair (650-699)",
+        ScoredApplicants[credit_score] >= 600, "Poor (600-649)",
+        "Very Poor (<600)"
+    )
+RETURN
+    CALCULATE([Default Rate], ScoredApplicants[credit_score_band] = ScoreBand)
+
+/* ============================================================
+   TIME INTELLIGENCE (if date column available)
+   ============================================================ */
+
+/* Assuming ScoredApplicants has a 'scored_date' column */
+Monthly Applications =
+CALCULATE(
+    [Total Applicants],
+    DATESMTD(ScoredApplicants[scored_date])
+)
+
+Monthly Default Rate =
+CALCULATE(
+    [Default Rate],
+    DATESMTD(ScoredApplicants[scored_date])
+)
+
+YoY Default Rate Change =
+VAR CurrentRate = [Default Rate]
+VAR PriorRate = CALCULATE([Default Rate], SAMEPERIODLASTYEAR(ScoredApplicants[scored_date]))
+RETURN DIVIDE(CurrentRate - PriorRate, PriorRate, BLANK())
+
+/* ============================================================
+   THRESHOLD ANALYSIS
+   ============================================================ */
+
+/* What-if parameter for threshold (create in Power BI: Modeling > New Parameter) */
+/* Name: ThresholdParameter, Data Type: Decimal, Min: 0, Max: 1, Increment: 0.01 */
+
+Approved at Threshold =
+CALCULATE(
+    [Total Applicants],
+    ScoredApplicants[default_probability] < SELECTEDVALUE(ThresholdParameter[ThresholdParameter])
+)
+
+Declined at Threshold =
+CALCULATE(
+    [Total Applicants],
+    ScoredApplicants[default_probability] >= SELECTEDVALUE(ThresholdParameter[ThresholdParameter])
+)
+
+Default Capture Rate at Threshold =
+VAR Threshold = SELECTEDVALUE(ThresholdParameter[ThresholdParameter])
+VAR CapturedDefaults =
+    CALCULATE(
+        COUNTROWS(ScoredApplicants),
+        ScoredApplicants[actual_default] = 1,
+        ScoredApplicants[default_probability] >= Threshold
+    )
+VAR TotalDefaults =
+    CALCULATE(
+        COUNTROWS(ScoredApplicants),
+        ScoredApplicants[actual_default] = 1
+    )
+RETURN DIVIDE(CapturedDefaults, TotalDefaults, 0)
+
+False Alarm Rate at Threshold =
+VAR Threshold = SELECTEDVALUE(ThresholdParameter[ThresholdParameter])
+VAR FalseAlarms =
+    CALCULATE(
+        COUNTROWS(ScoredApplicants),
+        ScoredApplicants[actual_default] = 0,
+        ScoredApplicants[default_probability] >= Threshold
+    )
+VAR TotalNonDefaults =
+    CALCULATE(
+        COUNTROWS(ScoredApplicants),
+        ScoredApplicants[actual_default] = 0
+    )
+RETURN DIVIDE(FalseAlarms, TotalNonDefaults, 0)
+
+/* ============================================================
+   FEATURE IMPORTANCE
+   ============================================================ */
+
+Top 10 Features =
+TOPN(
+    10,
+    FeatureImportance,
+    FeatureImportance[Importance],
+    DESC
+)
+
+/* ============================================================
+   DRIFT DETECTION (for monitoring)
+   ============================================================ */
+
+/* Population Stability Index (PSI) for a feature */
+/* Requires reference distribution (training) and current distribution */
+PSI Credit Score =
+VAR RefBins = CALCULATETABLE(
+    SUMMARIZE(ReferenceData, ReferenceData[credit_score_bin], "RefPct", DIVIDE(COUNTROWS(ReferenceData), CALCULATE(COUNTROWS(ReferenceData), ALL(ReferenceData)))),
+    ALL(ReferenceData)
+)
+VAR CurBins = CALCULATETABLE(
+    SUMMARIZE(ScoredApplicants, ScoredApplicants[credit_score_bin], "CurPct", DIVIDE(COUNTROWS(ScoredApplicants), CALCULATE(COUNTROWS(ScoredApplicants), ALL(ScoredApplicants)))),
+    ALL(ScoredApplicants)
+)
+VAR PSI = SUMX(
+    NATURALINNERJOIN(RefBins, CurBins),
+    ([CurPct] - [RefPct]) * LN(DIVIDE([CurPct], [RefPct], 1))
+)
+RETURN PSI
+
+/* PSI Interpretation:
+   PSI < 0.1: No significant change
+   0.1 <= PSI < 0.25: Moderate change - investigate
+   PSI >= 0.25: Significant change - model retraining needed
+*/
+
+/* ============================================================
+   VISUALIZATION HELPERS
+   ============================================================ */
+
+Risk Band Color =
+SWITCH(
+    SELECTEDVALUE(ScoredApplicants[risk_band]),
+    "Very Low", "#2E7D32",
+    "Low", "#66BB6A",
+    "Medium", "#FFCA28",
+    "High", "#EF6C00",
+    "Very High", "#C62828",
+    "#9E9E9E"
+)
+
+Decision Color =
+SWITCH(
+    SELECTEDVALUE(ScoredApplicants[decision]),
+    "Approve", "#2E7D32",
+    "Review", "#FFCA28",
+    "Decline", "#C62828",
+    "#9E9E9E"
+)
+
+/* ============================================================
+   KPI INDICATORS
+   ============================================================ */
+
+KPI Default Rate Status =
+IF(
+    [Default Rate] <= 0.05, "Good",
+    IF([Default Rate] <= 0.10, "Warning", "Critical")
+)
+
+KPI Portfolio Health =
+IF(
+    [Expected Loss Rate] <= 0.02, "Healthy",
+    IF([Expected Loss Rate] <= 0.05, "At Risk", "Critical")
+)
+
+/* ============================================================
+   CALCULATED TABLES (for slicers)
+   ============================================================ */
+
+RiskBandOrder =
+DATATABLE(
+    "RiskBand", STRING,
+    "SortOrder", INTEGER,
+    {
+        {"Very Low", 1},
+        {"Low", 2},
+        {"Medium", 3},
+        {"High", 4},
+        {"Very High", 5}
+    }
+)
+
+DecisionOrder =
+DATATABLE(
+    "Decision", STRING,
+    "SortOrder", INTEGER,
+    {
+        {"Approve", 1},
+        {"Review", 2},
+        {"Decline", 3}
+    }
+)
+
+/* ============================================================
+   MEASURE TABLE (create empty table for organization)
+   ============================================================ */
+
+/* In Power BI: Enter Data > Name: _Measures > Load
+   Then move all measures above into this table for clean organization */
+
+/* ============================================================
+   ROW-LEVEL SECURITY (RLS) EXAMPLE
+   ============================================================ */
+
+/* Role: RegionalManager
+   DAX Filter on ScoredApplicants:
+   ScoredApplicants[region] = USERPRINCIPALNAME()
+
+   Role: RiskOfficer
+   DAX Filter on ScoredApplicants:
+   ScoredApplicants[risk_band] IN {"High", "Very High"}
+*/
+
+/* ============================================================
+   USAGE NOTES
+   ============================================================
+
+1. Load CSV files from powerbi/ export directory into Power BI
+2. Create relationships:
+   - ScoredApplicants[applicant_id] is unique key
+   - RiskBands[RiskBand] to ScoredApplicants[risk_band]
+   - RiskBandOrder[RiskBand] to ScoredApplicants[risk_band]
+
+3. Create What-If Parameter for ThresholdParameter
+4. Set RiskBand Sort Order using RiskBandOrder[SortOrder]
+5. Set Decision Sort Order using DecisionOrder[SortOrder]
+6. Add conditional formatting using Risk Band Color / Decision Color measures
+7. Configure RLS roles as needed for data governance
+
+*/
